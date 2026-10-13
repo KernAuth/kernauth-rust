@@ -43,29 +43,67 @@ fn verify_grant(grant: &Value, nonce: &str, app: &str, key_id: &str, public_key:
     key.verify(&message, &signature).is_ok()
 }
 
-fn request(mode: &str, license: &str, installation: &str) -> Result<(), Box<dyn Error>> {
-    let mut random = [0u8; 24]; rand::thread_rng().fill_bytes(&mut random);
-    let nonce = URL_SAFE_NO_PAD.encode(random);
-    let fingerprint = format!("{:x}", Sha256::digest(format!("kernauth-device-v1:{installation}").as_bytes()));
-    let body = json!({ "protocol_version": 1, "public_app_id": APP_ID, "client_version": "1.0.0",
-        "license_key": license, "fingerprint_version": 1, "device_fingerprint": fingerprint,
-        "installation_id": installation, "nonce": nonce });
-    let client = reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(10)).build()?;
-    let response = client.post(format!("{API}/v1/client/{mode}")).json(&body).send()?.error_for_status()?;
-    let grant: Value = response.json()?;
-    if mode == "deactivate" {
-        if grant["deactivated"] != true { return Err("deactivation not confirmed".into()); }
-    } else if !verify_grant(&grant, &nonce, APP_ID, KEY_ID, PUBLIC_KEY, Utc::now()) {
-        return Err("invalid or expired signed entitlement".into());
+struct KernAuth {
+    api: String,
+    app_id: String,
+    key_id: String,
+    public_key: String,
+    success: bool,
+    message: String,
+}
+
+impl KernAuth {
+    fn new(api: &str, app_id: &str, key_id: &str, public_key: &str) -> Self {
+        Self { api: api.into(), app_id: app_id.into(), key_id: key_id.into(), public_key: public_key.into(),
+            success: false, message: String::new() }
     }
-    Ok(())
+
+    fn activate(&mut self, license: &str, installation: &str) -> bool {
+        self.call("activate", license, installation, "License is active")
+    }
+
+    fn validate(&mut self, license: &str, installation: &str) -> bool {
+        self.call("validate", license, installation, "License is active")
+    }
+
+    fn deactivate(&mut self, license: &str, installation: &str) -> bool {
+        self.call("deactivate", license, installation, "Device deactivated")
+    }
+
+    fn call(&mut self, mode: &str, license: &str, installation: &str, ok_message: &str) -> bool {
+        match self.post(mode, license, installation) {
+            Ok(()) => { self.success = true; self.message = ok_message.into(); true }
+            Err(error) => { self.success = false; self.message = error.to_string(); false }
+        }
+    }
+
+    fn post(&self, mode: &str, license: &str, installation: &str) -> Result<(), Box<dyn Error>> {
+        let mut random = [0u8; 24]; rand::thread_rng().fill_bytes(&mut random);
+        let nonce = URL_SAFE_NO_PAD.encode(random);
+        let fingerprint = format!("{:x}", Sha256::digest(format!("kernauth-device-v1:{installation}").as_bytes()));
+        let body = json!({ "protocol_version": 1, "public_app_id": self.app_id, "client_version": "1.0.0",
+            "license_key": license, "fingerprint_version": 1, "device_fingerprint": fingerprint,
+            "installation_id": installation, "nonce": nonce });
+        let client = reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(10)).build()?;
+        let response = client.post(format!("{}/v1/client/{mode}", self.api)).json(&body).send()?.error_for_status()?;
+        let grant: Value = response.json()?;
+        if mode == "deactivate" {
+            if grant["deactivated"] != true { return Err("deactivation not confirmed".into()); }
+        } else if !verify_grant(&grant, &nonce, &self.app_id, &self.key_id, &self.public_key, Utc::now()) {
+            return Err("invalid or expired signed entitlement".into());
+        }
+        Ok(())
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     let license = env::var("KERN_LICENSE_KEY")?;
     let installation = env::var("KERN_INSTALLATION_ID")?; // Persist once per device.
-    for mode in ["activate", "validate", "deactivate"] { request(mode, &license, &installation)?; }
-    println!("Signed entitlement verified and device deactivated");
+    let mut app = KernAuth::new(API, APP_ID, KEY_ID, PUBLIC_KEY);
+    if !app.activate(&license, &installation) || !app.validate(&license, &installation) || !app.deactivate(&license, &installation) {
+        return Err(app.message.into());
+    }
+    println!("{}", app.message);
     Ok(())
 }
 
