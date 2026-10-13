@@ -1,4 +1,3 @@
-// Protocol example. cargo run --manifest-path apps/web/src/examples/rust/Cargo.toml
 use base64::{engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}, Engine};
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
@@ -13,35 +12,6 @@ const KEY_ID: &str = "__KEY_ID__";
 const PUBLIC_KEY: &str = "__PUBLIC_KEY__";
 const FIELDS: [&str; 12] = ["protocol_version", "entitlement_id", "application_id", "license_id",
     "status", "features", "device_id", "issued_at", "expires_at", "server_time", "nonce", "key_id"];
-
-fn canonical(ent: &Value) -> Result<Vec<u8>, Box<dyn Error>> {
-    let mut output = String::new();
-    for name in FIELDS {
-        let value = if name == "features" {
-            let feature = &ent[name];
-            let parsed = if let Some(raw) = feature.as_str() { serde_json::from_str::<Value>(raw)? } else { feature.clone() };
-            serde_json::to_string(&parsed)?
-        } else if name == "protocol_version" { ent[name].to_string() }
-        else { ent[name].as_str().ok_or("missing entitlement field")?.to_owned() };
-        if value.contains('\n') || value.contains('\r') { return Err("invalid entitlement field".into()); }
-        output.push_str(name); output.push('='); output.push_str(&value); output.push('\n');
-    }
-    Ok(output.into_bytes())
-}
-
-fn verify_grant(grant: &Value, nonce: &str, app: &str, key_id: &str, public_key: &str, now: DateTime<Utc>) -> bool {
-    let ent = &grant["entitlement"];
-    let expiry = ent["expires_at"].as_str().and_then(|s| DateTime::parse_from_rfc3339(s).ok());
-    if ent["protocol_version"] != 1 || ent["application_id"] != app || ent["key_id"] != key_id ||
-        ent["nonce"] != nonce || ent["status"] != "active" ||
-        !expiry.is_some_and(|date| date.with_timezone(&Utc) > now) { return false; }
-    let message = match canonical(ent) { Ok(value) => value, Err(_) => return false };
-    let key = match STANDARD.decode(public_key).ok().and_then(|v| <[u8; 32]>::try_from(v).ok())
-        .and_then(|v| VerifyingKey::from_bytes(&v).ok()) { Some(value) => value, None => return false };
-    let signature = match grant["signature"].as_str().and_then(|s| STANDARD.decode(s).ok())
-        .and_then(|v| Signature::from_slice(&v).ok()) { Some(value) => value, None => return false };
-    key.verify(&message, &signature).is_ok()
-}
 
 struct KernAuth {
     api: String,
@@ -98,13 +68,43 @@ impl KernAuth {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let license = env::var("KERN_LICENSE_KEY")?;
-    let installation = env::var("KERN_INSTALLATION_ID")?; // Persist once per device.
+    let installation = env::var("KERN_INSTALLATION_ID")?;
     let mut app = KernAuth::new(API, APP_ID, KEY_ID, PUBLIC_KEY);
     if !app.activate(&license, &installation) || !app.validate(&license, &installation) || !app.deactivate(&license, &installation) {
         return Err(app.message.into());
     }
     println!("{}", app.message);
     Ok(())
+}
+
+
+fn canonical(ent: &Value) -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut output = String::new();
+    for name in FIELDS {
+        let value = if name == "features" {
+            let feature = &ent[name];
+            let parsed = if let Some(raw) = feature.as_str() { serde_json::from_str::<Value>(raw)? } else { feature.clone() };
+            serde_json::to_string(&parsed)?
+        } else if name == "protocol_version" { ent[name].to_string() }
+        else { ent[name].as_str().ok_or("missing entitlement field")?.to_owned() };
+        if value.contains('\n') || value.contains('\r') { return Err("invalid entitlement field".into()); }
+        output.push_str(name); output.push('='); output.push_str(&value); output.push('\n');
+    }
+    Ok(output.into_bytes())
+}
+
+fn verify_grant(grant: &Value, nonce: &str, app: &str, key_id: &str, public_key: &str, now: DateTime<Utc>) -> bool {
+    let ent = &grant["entitlement"];
+    let expiry = ent["expires_at"].as_str().and_then(|s| DateTime::parse_from_rfc3339(s).ok());
+    if ent["protocol_version"] != 1 || ent["application_id"] != app || ent["key_id"] != key_id ||
+        ent["nonce"] != nonce || ent["status"] != "active" ||
+        !expiry.is_some_and(|date| date.with_timezone(&Utc) > now) { return false; }
+    let message = match canonical(ent) { Ok(value) => value, Err(_) => return false };
+    let key = match STANDARD.decode(public_key).ok().and_then(|v| <[u8; 32]>::try_from(v).ok())
+        .and_then(|v| VerifyingKey::from_bytes(&v).ok()) { Some(value) => value, None => return false };
+    let signature = match grant["signature"].as_str().and_then(|s| STANDARD.decode(s).ok())
+        .and_then(|v| Signature::from_slice(&v).ok()) { Some(value) => value, None => return false };
+    key.verify(&message, &signature).is_ok()
 }
 
 #[cfg(test)]
