@@ -1,0 +1,13 @@
+[package]
+name = "kernauth-protocol-example"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+base64 = "0.22"
+chrono = "0.4"
+ed25519-dalek = "2.1"
+rand = "0.8"
+reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"], default-features = false }
+serde_json = "1"
+sha2 = "0.10"
