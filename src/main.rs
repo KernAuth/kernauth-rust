@@ -28,16 +28,8 @@ impl KernAuth {
             success: false, message: String::new() }
     }
 
-    fn activate(&mut self, license: &str, installation: &str) -> bool {
-        self.call("activate", license, installation, "License is active")
-    }
-
     fn validate(&mut self, license: &str, installation: &str) -> bool {
         self.call("validate", license, installation, "License is active")
-    }
-
-    fn deactivate(&mut self, license: &str, installation: &str) -> bool {
-        self.call("deactivate", license, installation, "Device deactivated")
     }
 
     fn call(&mut self, mode: &str, license: &str, installation: &str, ok_message: &str) -> bool {
@@ -57,9 +49,7 @@ impl KernAuth {
         let client = reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(10)).build()?;
         let response = client.post(format!("{}/v1/client/{mode}", self.api)).json(&body).send()?.error_for_status()?;
         let grant: Value = response.json()?;
-        if mode == "deactivate" {
-            if grant["deactivated"] != true { return Err("deactivation not confirmed".into()); }
-        } else if !verify_grant(&grant, &nonce, &self.app_id, &self.key_id, &self.public_key, Utc::now()) {
+        if !verify_grant(&grant, &nonce, &self.app_id, &self.key_id, &self.public_key, Utc::now()) {
             return Err("invalid or expired signed entitlement".into());
         }
         Ok(())
@@ -70,7 +60,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let license = env::var("KERN_LICENSE_KEY")?;
     let installation = env::var("KERN_INSTALLATION_ID")?;
     let mut app = KernAuth::new(API, APP_ID, KEY_ID, PUBLIC_KEY);
-    if !app.activate(&license, &installation) || !app.validate(&license, &installation) || !app.deactivate(&license, &installation) {
+    if !app.validate(&license, &installation) {
         return Err(app.message.into());
     }
     println!("{}", app.message);

@@ -1,6 +1,6 @@
 # KernAuth Rust example
 
-Protocol example. This is not the official SDK. The official client is the C++ SDK. This file calls the same activate, validate, and deactivate routes and checks the Ed25519 signature.
+Protocol example. This is not the official SDK. The official client is the C++ SDK. This file calls validate and checks the Ed25519 signature.
 
 ## Add it
 
@@ -23,14 +23,6 @@ let mut app = KernAuth::new(
 );
 ```
 
-## Activate
-
-```rust
-if !app.activate(&license, &installation) {
-    return Err(app.message.into());
-}
-```
-
 ## Validate
 
 ```rust
@@ -38,16 +30,6 @@ if !app.validate(&license, &installation) {
     return Err(app.message.into());
 }
 ```
-
-## Deactivate
-
-```rust
-if !app.deactivate(&license, &installation) {
-    return Err(app.message.into());
-}
-```
-
-`app.message` is `Device deactivated` after a successful deactivate.
 
 A patched program can still skip the check. These examples do not add anti-debug or anti-VM code.
 
