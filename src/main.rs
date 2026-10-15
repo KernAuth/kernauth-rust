@@ -8,7 +8,6 @@ use std::{env, error::Error, fs, io::{BufRead, IsTerminal, Write}};
 
 const API: &str = "https://api.kernauth.com";
 const APP_ID: &str = "__PUBLIC_APP_ID__";
-const KEY_ID: &str = "__KEY_ID__";
 const PUBLIC_KEY: &str = "__PUBLIC_KEY__";
 const FIELDS: [&str; 12] = ["protocol_version", "entitlement_id", "application_id", "license_id",
     "status", "features", "device_id", "issued_at", "expires_at", "server_time", "nonce", "key_id"];
@@ -16,7 +15,6 @@ const FIELDS: [&str; 12] = ["protocol_version", "entitlement_id", "application_i
 struct KernAuth {
     api: String,
     app_id: String,
-    key_id: String,
     public_key: String,
     success: bool,
     message: String,
@@ -27,8 +25,8 @@ struct KernAuth {
 }
 
 impl KernAuth {
-    fn new(api: &str, app_id: &str, key_id: &str, public_key: &str) -> Self {
-        Self { api: api.into(), app_id: app_id.into(), key_id: key_id.into(), public_key: public_key.into(),
+    fn new(api: &str, app_id: &str, public_key: &str) -> Self {
+        Self { api: api.into(), app_id: app_id.into(), public_key: public_key.into(),
             success: false, message: String::new(), status: String::new(), features: String::new(),
             license_id: String::new(), expires_at: String::new() }
     }
@@ -62,7 +60,7 @@ impl KernAuth {
         let client = reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(10)).build()?;
         let response = client.post(format!("{}/v1/client/{mode}", self.api)).json(&body).send()?.error_for_status()?;
         let grant: Value = response.json()?;
-        if !verify_grant(&grant, &nonce, &self.app_id, &self.key_id, &self.public_key, Utc::now()) {
+        if !verify_grant(&grant, &nonce, &self.app_id, &self.public_key, Utc::now()) {
             return Err("invalid or expired signed entitlement".into());
         }
         Ok(grant["entitlement"].clone())
@@ -127,7 +125,7 @@ fn installation_id() -> Result<String, Box<dyn Error>> {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let mut app = KernAuth::new(API, APP_ID, KEY_ID, PUBLIC_KEY);
+    let mut app = KernAuth::new(API, APP_ID, PUBLIC_KEY);
     if !app.validate(&license_key()?, &installation_id()?) {
         return Err(app.message.into());
     }
@@ -154,10 +152,10 @@ fn canonical(ent: &Value) -> Result<Vec<u8>, Box<dyn Error>> {
     Ok(output.into_bytes())
 }
 
-fn verify_grant(grant: &Value, nonce: &str, app: &str, key_id: &str, public_key: &str, now: DateTime<Utc>) -> bool {
+fn verify_grant(grant: &Value, nonce: &str, app: &str, public_key: &str, now: DateTime<Utc>) -> bool {
     let ent = &grant["entitlement"];
     let expiry = ent["expires_at"].as_str().and_then(|s| DateTime::parse_from_rfc3339(s).ok());
-    if ent["protocol_version"] != 1 || ent["application_id"] != app || ent["key_id"] != key_id ||
+    if ent["protocol_version"] != 1 || ent["application_id"] != app ||
         ent["nonce"] != nonce || ent["status"] != "active" ||
         !expiry.is_some_and(|date| date.with_timezone(&Utc) > now) { return false; }
     let message = match canonical(ent) { Ok(value) => value, Err(_) => return false };
@@ -181,18 +179,16 @@ mod tests {
             let grant = json!({ "entitlement": ent, "signature": vector["signature"] });
             let nonce = ent["nonce"].as_str().unwrap();
             let app = ent["application_id"].as_str().unwrap();
-            let key = ent["key_id"].as_str().unwrap();
             let public = vector["public_key"].as_str().unwrap();
-            assert!(verify_grant(&grant, nonce, app, key, public, now));
-            assert!(!verify_grant(&grant, "wrong", app, key, public, now));
-            assert!(!verify_grant(&grant, nonce, "pub_other_app", key, public, now));
-            assert!(!verify_grant(&grant, nonce, app, "wrong-key", public, now));
+            assert!(verify_grant(&grant, nonce, app, public, now));
+            assert!(!verify_grant(&grant, "wrong", app, public, now));
+            assert!(!verify_grant(&grant, nonce, "pub_other_app", public, now));
             let mut bad_sig = grant.clone();
             bad_sig["signature"] = json!(format!("{}AA", vector["signature"].as_str().unwrap()));
-            assert!(!verify_grant(&bad_sig, nonce, app, key, public, now));
-            assert!(!verify_grant(&grant, nonce, app, key, public, now + chrono::Duration::minutes(20)));
+            assert!(!verify_grant(&bad_sig, nonce, app, public, now));
+            assert!(!verify_grant(&grant, nonce, app, public, now + chrono::Duration::minutes(20)));
             let mut altered = grant.clone(); altered["entitlement"]["device_id"] = json!("other");
-            assert!(!verify_grant(&altered, nonce, app, key, public, now));
+            assert!(!verify_grant(&altered, nonce, app, public, now));
         }
     }
 }

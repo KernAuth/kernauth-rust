@@ -1,6 +1,6 @@
 # KernAuth Rust example
 
-Paste the public app ID, key ID, and public key from Developers into `src/main.rs`. Build with the Cargo.toml in this repository.
+Paste the public app ID and public key from Developers into `src/main.rs`. Build with the Cargo.toml in this repository.
 
 ## Instance
 
@@ -8,7 +8,6 @@ Paste the public app ID, key ID, and public key from Developers into `src/main.r
 let mut app = KernAuth::new(
     "https://api.kernauth.com",
     "__PUBLIC_APP_ID__",
-    "__KEY_ID__",
     "__PUBLIC_KEY__",
 );
 ```
