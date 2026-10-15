@@ -593,7 +593,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kernauth-protocol-example"
+name = "kernauth-example"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",

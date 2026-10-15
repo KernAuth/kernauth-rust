@@ -1,16 +1,6 @@
 # KernAuth Rust example
 
-Example for Rust. This file calls validate and checks the Ed25519 signature.
-
-## Add it
-
-Paste the public app ID, key ID, and public key from Developers over the placeholders in `src/main.rs`.
-
-```
-cargo test
-```
-
-Run with `KERN_LICENSE_KEY` and `KERN_INSTALLATION_ID` set. Persist one installation ID per device.
+Paste the public app ID, key ID, and public key from Developers into `src/main.rs`. Build with the Cargo.toml in this repository.
 
 ## Instance
 
@@ -29,8 +19,21 @@ let mut app = KernAuth::new(
 if !app.validate(&license, &installation) {
     return Err(app.message.into());
 }
+println!("Status: {}", app.status);
+println!("Features: {}", app.features);
+println!("License: {}", app.license_id);
+println!("Check expires: {}", app.expires_at);
 ```
 
-A patched program can still skip the check. These examples do not add anti-debug or anti-VM code.
+A good check prints the status, the feature flags stored on the license, the license id, and when this check expires. Type the license key at the prompt. `KERN_LICENSE_KEY` skips the prompt. The program saves an installation id in `kernauth-install` and reuses it. `KERN_INSTALLATION_ID` overrides that file.
+
+## Run
+
+```
+cargo test
+cargo run
+```
+
+A modified program can still skip the check.
 
 Documentation: https://kernauth.apidog.io

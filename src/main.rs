@@ -4,7 +4,7 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rand::RngCore;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{env, error::Error};
+use std::{env, error::Error, fs, io::{BufRead, IsTerminal, Write}};
 
 const API: &str = "https://api.kernauth.com";
 const APP_ID: &str = "__PUBLIC_APP_ID__";
@@ -20,12 +20,17 @@ struct KernAuth {
     public_key: String,
     success: bool,
     message: String,
+    status: String,
+    features: String,
+    license_id: String,
+    expires_at: String,
 }
 
 impl KernAuth {
     fn new(api: &str, app_id: &str, key_id: &str, public_key: &str) -> Self {
         Self { api: api.into(), app_id: app_id.into(), key_id: key_id.into(), public_key: public_key.into(),
-            success: false, message: String::new() }
+            success: false, message: String::new(), status: String::new(), features: String::new(),
+            license_id: String::new(), expires_at: String::new() }
     }
 
     fn validate(&mut self, license: &str, installation: &str) -> bool {
@@ -34,12 +39,20 @@ impl KernAuth {
 
     fn call(&mut self, mode: &str, license: &str, installation: &str, ok_message: &str) -> bool {
         match self.post(mode, license, installation) {
-            Ok(()) => { self.success = true; self.message = ok_message.into(); true }
+            Ok(ent) => {
+                self.success = true;
+                self.message = ok_message.into();
+                self.status = ent["status"].as_str().unwrap_or("").into();
+                self.features = feature_text(&ent["features"]);
+                self.license_id = ent["license_id"].as_str().unwrap_or("").into();
+                self.expires_at = ent["expires_at"].as_str().unwrap_or("").into();
+                true
+            }
             Err(error) => { self.success = false; self.message = error.to_string(); false }
         }
     }
 
-    fn post(&self, mode: &str, license: &str, installation: &str) -> Result<(), Box<dyn Error>> {
+    fn post(&self, mode: &str, license: &str, installation: &str) -> Result<Value, Box<dyn Error>> {
         let mut random = [0u8; 24]; rand::thread_rng().fill_bytes(&mut random);
         let nonce = URL_SAFE_NO_PAD.encode(random);
         let fingerprint = format!("{:x}", Sha256::digest(format!("kernauth-device-v1:{installation}").as_bytes()));
@@ -52,18 +65,59 @@ impl KernAuth {
         if !verify_grant(&grant, &nonce, &self.app_id, &self.key_id, &self.public_key, Utc::now()) {
             return Err("invalid or expired signed entitlement".into());
         }
-        Ok(())
+        Ok(grant["entitlement"].clone())
     }
 }
 
+fn feature_text(feature: &Value) -> String {
+    let parsed = if let Some(raw) = feature.as_str() {
+        serde_json::from_str::<Value>(raw).unwrap_or(Value::Null)
+    } else {
+        feature.clone()
+    };
+    serde_json::to_string(&parsed).unwrap_or_else(|_| "{}".to_owned())
+}
+
+fn license_key() -> Result<String, Box<dyn Error>> {
+    if let Ok(value) = env::var("KERN_LICENSE_KEY") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() { return Ok(trimmed.to_owned()); }
+    }
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        print!("Enter license: ");
+        std::io::stdout().flush()?;
+    }
+    let mut line = String::new();
+    stdin.lock().read_line(&mut line)?;
+    Ok(line.trim().to_owned())
+}
+
+fn installation_id() -> Result<String, Box<dyn Error>> {
+    if let Ok(value) = env::var("KERN_INSTALLATION_ID") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() { return Ok(trimmed.to_owned()); }
+    }
+    if let Ok(saved) = fs::read_to_string("kernauth-install") {
+        let saved = saved.trim();
+        if !saved.is_empty() { return Ok(saved.to_owned()); }
+    }
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let saved = bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    fs::write("kernauth-install", format!("{saved}\n"))?;
+    Ok(saved)
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
-    let license = env::var("KERN_LICENSE_KEY")?;
-    let installation = env::var("KERN_INSTALLATION_ID")?;
     let mut app = KernAuth::new(API, APP_ID, KEY_ID, PUBLIC_KEY);
-    if !app.validate(&license, &installation) {
+    if !app.validate(&license_key()?, &installation_id()?) {
         return Err(app.message.into());
     }
-    println!("{}", app.message);
+    println!("Status: {}", app.status);
+    println!("Features: {}", app.features);
+    println!("License: {}", app.license_id);
+    println!("Check expires: {}", app.expires_at);
     Ok(())
 }
 
