@@ -93,20 +93,37 @@ fn license_key() -> Result<String, Box<dyn Error>> {
     Ok(line.trim().to_owned())
 }
 
+fn acceptable_hwid(value: &str) -> bool {
+    (8..=64).contains(&value.len()) && value.chars().all(|cell| cell.is_ascii_alphanumeric() || cell == '_' || cell == '-')
+}
+
+fn machine_hwid() -> Result<String, Box<dyn Error>> {
+    if cfg!(target_os = "windows") {
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-Command", "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value"])
+            .output()?;
+        return Ok(String::from_utf8(output.stdout)?);
+    }
+    if cfg!(target_os = "macos") {
+        let output = std::process::Command::new("ioreg").args(["-rd1", "-c", "IOPlatformExpertDevice"]).output()?;
+        let text = String::from_utf8(output.stdout)?;
+        let marker = "\"IOPlatformUUID\" = \"";
+        let Some(start) = text.find(marker) else { return Ok(String::new()) };
+        let rest = &text[start + marker.len()..];
+        let Some(end) = rest.find('"') else { return Ok(String::new()) };
+        return Ok(rest[..end].to_owned());
+    }
+    Ok(fs::read_to_string("/etc/machine-id")?)
+}
+
 fn installation_id() -> Result<String, Box<dyn Error>> {
     if let Ok(value) = env::var("KERN_INSTALLATION_ID") {
         let trimmed = value.trim();
         if !trimmed.is_empty() { return Ok(trimmed.to_owned()); }
     }
-    if let Ok(saved) = fs::read_to_string("kernauth-install") {
-        let saved = saved.trim();
-        if !saved.is_empty() { return Ok(saved.to_owned()); }
-    }
-    let mut bytes = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    let saved = bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
-    fs::write("kernauth-install", format!("{saved}\n"))?;
-    Ok(saved)
+    let hwid = machine_hwid()?.trim().to_owned();
+    if acceptable_hwid(&hwid) { return Ok(hwid); }
+    Err("Could not read the HWID".into())
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
