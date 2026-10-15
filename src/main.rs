@@ -58,13 +58,44 @@ impl KernAuth {
             "license_key": license, "fingerprint_version": 1, "device_fingerprint": fingerprint,
             "installation_id": installation, "nonce": nonce });
         let client = reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(10)).build()?;
-        let response = client.post(format!("{}/v1/client/{mode}", self.api)).json(&body).send()?.error_for_status()?;
+        let response = client.post(format!("{}/v1/client/{mode}", self.api)).json(&body).send()?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            return Err(api_message(&text, &format!("{mode} failed: {status}")).into());
+        }
         let grant: Value = response.json()?;
         if !verify_grant(&grant, &nonce, &self.app_id, &self.public_key, Utc::now()) {
             return Err("invalid or expired signed entitlement".into());
         }
         Ok(grant["entitlement"].clone())
     }
+
+    fn heartbeat(&self, license: &str, installation: &str) -> Result<(), Box<dyn Error>> {
+        let mut random = [0u8; 24]; rand::thread_rng().fill_bytes(&mut random);
+        let nonce = URL_SAFE_NO_PAD.encode(random);
+        let fingerprint = format!("{:x}", Sha256::digest(format!("kernauth-device-v1:{installation}").as_bytes()));
+        let body = json!({ "protocol_version": 1, "public_app_id": self.app_id, "client_version": "1.0.0",
+            "license_key": license, "fingerprint_version": 1, "device_fingerprint": fingerprint,
+            "installation_id": installation, "nonce": nonce });
+        let client = reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(10)).build()?;
+        let response = client.post(format!("{}/v1/client/heartbeat", self.api)).json(&body).send()?;
+        let status = response.status();
+        let text = response.text().unwrap_or_default();
+        if !status.is_success() {
+            return Err(api_message(&text, &format!("heartbeat failed: {status}")).into());
+        }
+        let payload: Value = serde_json::from_str(&text)?;
+        if payload["ok"] != true { return Err("heartbeat failed".into()); }
+        Ok(())
+    }
+}
+
+fn api_message(text: &str, fallback: &str) -> String {
+    serde_json::from_str::<Value>(text).ok()
+        .and_then(|value| value["error"]["message"].as_str().map(str::to_owned))
+        .filter(|message| !message.is_empty())
+        .unwrap_or_else(|| fallback.to_owned())
 }
 
 fn feature_text(feature: &Value) -> String {
@@ -126,14 +157,22 @@ fn installation_id() -> Result<String, Box<dyn Error>> {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut app = KernAuth::new(API, APP_ID, PUBLIC_KEY);
-    if !app.validate(&license_key()?, &installation_id()?) {
+    let key = license_key()?;
+    let hwid = installation_id()?;
+    if !app.validate(&key, &hwid) {
         return Err(app.message.into());
     }
     println!("Status: {}", app.status);
     println!("Features: {}", app.features);
     println!("License: {}", app.license_id);
     println!("Check expires: {}", app.expires_at);
-    Ok(())
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        if let Err(error) = app.heartbeat(&key, &hwid) {
+            println!("{error}");
+            std::process::exit(1);
+        }
+    }
 }
 
 
