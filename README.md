@@ -1,6 +1,6 @@
 # KernAuth Rust example
 
-Protocol example. This is not the official SDK. The official client is the C++ SDK. This file calls validate and checks the Ed25519 signature.
+Example for Rust. This file calls validate and checks the Ed25519 signature.
 
 ## Add it
 
